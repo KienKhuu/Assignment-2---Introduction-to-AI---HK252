@@ -16,7 +16,7 @@ def load_images():
     pieces = ["wP", "wR", "wN", "wB", "wQ", "wK", "bP", "bR", "bN", "bB", "bQ", "bK"]
     for piece in pieces:
         try:
-            img = pygame.image.load(f"a2/images/{piece}.png")
+            img = pygame.image.load(f"images/{piece}.png")
             IMAGES[piece] = pygame.transform.scale(img, (SQ_SIZE, SQ_SIZE))
         except FileNotFoundError:
             print(
