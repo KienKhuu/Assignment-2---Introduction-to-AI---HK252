@@ -95,39 +95,39 @@ class BaseSearchAgent(Player):
         Đoạn code dưới đây chỉ là bộ khung cơ bản, đồng đội của cậu cần tối ưu nó.
         """
         ### Sample guide
-        # best_move = None
-        # legal_moves = list(board.legal_moves)
-
-        # if not legal_moves:
-        #     return None
-
-        # maximizing_player = board.turn == chess.WHITE
-        # best_value = -math.inf if maximizing_player else math.inf
-
-        # for move in legal_moves:
-        #     board.push(move)
-        #     # Gọi minimax cho nhánh con
-        #     board_value = self.minimax(
-        #         board, self.depth - 1, -math.inf, math.inf, not maximizing_player
-        #     )
-        #     board.pop()
-
-        #     if maximizing_player:
-        #         if board_value > best_value:
-        #             best_value = board_value
-        #             best_move = move
-        #     else:
-        #         if board_value < best_value:
-        #             best_value = board_value
-        #             best_move = move
-
-        # # Fallback an toàn nếu thuật toán lỗi và không chọn được nước nào
-        # if best_move is None:
-        #     best_move = random.choice(legal_moves)
-
-        # return best_move
+        best_move = None
         legal_moves = list(board.legal_moves)
-        return random.choice(legal_moves) if legal_moves else None
+
+        if not legal_moves:
+            return None
+
+        maximizing_player = board.turn == chess.WHITE
+        best_value = -math.inf if maximizing_player else math.inf
+
+        for move in legal_moves:
+            board.push(move)
+            # Gọi minimax cho nhánh con
+            board_value = self.minimax(
+                board, self.depth - 1, -math.inf, math.inf, not maximizing_player
+            )
+            board.pop()
+
+            if maximizing_player:
+                if board_value > best_value:
+                    best_value = board_value
+                    best_move = move
+            else:
+                if board_value < best_value:
+                    best_value = board_value
+                    best_move = move
+
+        # Fallback an toàn nếu thuật toán lỗi và không chọn được nước nào
+        if best_move is None:
+            best_move = random.choice(legal_moves)
+
+        return best_move
+        # legal_moves = list(board.legal_moves)
+        # return random.choice(legal_moves) if legal_moves else None
 
 
 # --- CÁC LEVEL CỤ THỂ ĐỂ BIND VÀO UI ---
@@ -143,11 +143,83 @@ class PoorAgent(BaseSearchAgent):
 
 
 class AverageAgent(BaseSearchAgent):
-    """Level 2: Nhìn trước 2-3 nước. Đánh tàm tạm."""
-
     def __init__(self):
         super().__init__(depth=3)
+        
+        # 1. BẢNG GIÁ TRỊ VẬT CHẤT (Centipawns: 1 Tốt = 100 điểm)
+        self.piece_values = {
+            chess.PAWN: 100,
+            chess.KNIGHT: 320,
+            chess.BISHOP: 330,
+            chess.ROOK: 500,
+            chess.QUEEN: 900,
+            chess.KING: 20000
+        }
 
+        # 2. BẢNG VỊ TRÍ (PST) - Góc nhìn của quân Trắng
+        # Điểm dương = Khuyến khích đứng vào ô đó, Điểm âm = Tránh xa
+        
+        # Khuyến khích Mã (Knight) đứng ở trung tâm, phạt nặng nếu ra rìa
+        self.knight_pst = [
+            -50,-40,-30,-30,-30,-30,-40,-50,
+            -40,-20,  0,  0,  0,  0,-20,-40,
+            -30,  0, 10, 15, 15, 10,  0,-30,
+            -30,  5, 15, 20, 20, 15,  5,-30,
+            -30,  0, 15, 20, 20, 15,  0,-30,
+            -30,  5, 10, 15, 15, 10,  5,-30,
+            -40,-20,  0,  5,  5,  0,-20,-40,
+            -50,-40,-30,-30,-30,-30,-40,-50,
+        ]
+
+        # Khuyến khích Tốt (Pawn) tiến lên phía trước và kiểm soát trung tâm
+        self.pawn_pst = [
+             0,  0,  0,  0,  0,  0,  0,  0,
+            50, 50, 50, 50, 50, 50, 50, 50,
+            10, 10, 20, 30, 30, 20, 10, 10,
+             5,  5, 10, 25, 25, 10,  5,  5,
+             0,  0,  0, 20, 20,  0,  0,  0,
+             5, -5,-10,  0,  0,-10, -5,  5,
+             5, 10, 10,-20,-20, 10, 10,  5,
+             0,  0,  0,  0,  0,  0,  0,  0
+        ]
+
+    def evaluate_board(self, board: chess.Board) -> float:
+        """
+        Ghi đè hàm đánh giá từ class cha.
+        Luật bắt buộc: Trả về số dương nếu Trắng đang lợi thế, số âm nếu Đen lợi thế.
+        """
+        # Kiểm tra trạng thái kết thúc game trước tiên
+        if board.is_checkmate():
+            # Nếu đến lượt Trắng đi mà bị chiếu hết -> Đen thắng -> Trả về âm vô cực
+            return -99999 if board.turn == chess.WHITE else 99999
+        if board.is_stalemate() or board.is_insufficient_material():
+            return 0.0
+
+        score = 0.0
+        
+        # Duyệt qua tất cả các quân cờ đang có trên bàn
+        for square, piece in board.piece_map().items():
+            # Lấy giá trị cơ bản của quân cờ
+            val = self.piece_values[piece.piece_type]
+            
+            # Cộng điểm vị trí (chỉ áp dụng cho Tốt và Mã để đơn giản hóa, 
+            # cậu có thể tự Google thêm PST cho Xe, Tượng, Hậu)
+            pst_val = 0
+            if piece.piece_type == chess.KNIGHT:
+                # Nếu là quân Đen, phải lật ngược bảng PST lại (63 - square)
+                sq_idx = square if piece.color == chess.WHITE else 63 - square
+                pst_val = self.knight_pst[sq_idx]
+            elif piece.piece_type == chess.PAWN:
+                sq_idx = square if piece.color == chess.WHITE else 63 - square
+                pst_val = self.pawn_pst[sq_idx]
+
+            # Nếu là quân Trắng -> cộng vào tổng điểm. Nếu là Đen -> trừ đi.
+            if piece.color == chess.WHITE:
+                score += (val + pst_val)
+            else:
+                score -= (val + pst_val)
+
+        return score
     # Đồng đội 2 có thể override hàm evaluate_board ở đây để tính thêm vị trí đứng của quân cờ (Piece-Square Tables).
 
 

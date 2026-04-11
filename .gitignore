@@ -1,0 +1,11 @@
+# Bỏ qua bộ nhớ đệm của Python
+__pycache__/
+*.py[cod]
+
+# Bỏ qua file rác của hệ điều hành
+.DS_Store
+Thumbs.db
+
+# Bỏ qua thư mục của các phần mềm code (như VSCode, PyCharm)
+.vscode/
+.idea/
