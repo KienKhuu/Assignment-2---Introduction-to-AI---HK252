@@ -353,32 +353,145 @@ class AverageAgent(BaseSearchAgent):
 
 class MLGoodAgent(BaseSearchAgent):
     """
-    Dummy ML Agent (Level 3).
-    Cần một mô hình Multi-Layer Perceptron (Mạng nơ-ron) xịn và depth cao hơn.
+    Level 3: Mạng Nơ-ron (MLP) kết hợp Minimax + Alpha-Beta Pruning + Move Ordering + Caching.
     """
     def __init__(self):
-        super().__init__(depth=3) # Nhìn xa hơn để tận dụng mô hình xịn
-        self.model = None
+        super().__init__(depth=3) # Set depth=3 để đảm bảo tốc độ tính toán với Mạng Nơ-ron
         
-        # MẪU CODE ĐỂ LOAD MODEL SAU NÀY (Bỏ comment khi đã có file):
-        # try:
-        #     self.model = joblib.load("good_ml_model.pkl")
-        # except FileNotFoundError:
-        #     print("Chưa có file good_ml_model.pkl")
+        # 1. Tải mô hình Neural Network (MLP)
+        try:
+            self.model = joblib.load("./models/good_mlp_model.pkl")
+        except FileNotFoundError:
+            print("CẢNH BÁO: Không tìm thấy good_mlp_model.pkl. Bot sẽ đánh ngẫu nhiên.")
+            self.model = None
+            
+        # 2. Khởi tạo Cache (Transposition Table) để tăng tốc dự đoán
+        self.table_cache = {}
+        
+        # 3. Bảng giá trị vật chất phục vụ riêng cho Hàm sắp xếp nước đi (Move Ordering)
+        self.piece_values = {
+            chess.PAWN: 100, chess.KNIGHT: 320, chess.BISHOP: 330,
+            chess.ROOK: 500, chess.QUEEN: 900, chess.KING: 20000
+        }
+
+    def order_moves(self, board: chess.Board, moves: list) -> list:
+        """Sắp xếp nước đi (Move Ordering) để tăng tối đa khả năng cắt tỉa Alpha-Beta"""
+        def move_guess_score(move):
+            score = 0
+            # Ưu tiên ăn quân (MVV-LVA)
+            if board.is_capture(move):
+                if board.is_en_passant(move):
+                    score += 100
+                else:
+                    victim = board.piece_at(move.to_square)
+                    attacker = board.piece_at(move.from_square)
+                    if victim and attacker:
+                        score += 10 * self.piece_values.get(victim.piece_type, 0) - self.piece_values.get(attacker.piece_type, 0)
+            
+            # Ưu tiên phong cấp
+            if move.promotion:
+                score += 900
+            
+            # Ưu tiên chiếu Vua
+            if board.gives_check(move):
+                score += 50
+                
+            return score
+
+        return sorted(moves, key=move_guess_score, reverse=True)
 
     def evaluate_board(self, board: chess.Board) -> float:
+        """Hàm đánh giá chính sử dụng Mạng Nơ-ron"""
+        if self.model is None:
+            return 0.0
+
         if board.is_checkmate():
             return -99999 if board.turn == chess.WHITE else 99999
         if board.is_stalemate() or board.is_insufficient_material():
             return 0.0
-            
-        # Dummy behavior
-        if self.model is None:
+
+        # KỸ THUẬT CACHE: Kiểm tra FEN trước khi gọi model dự đoán
+        fen_key = board.fen()
+        if fen_key in self.table_cache:
+            return self.table_cache[fen_key]
+
+        # Lấy đặc trưng (features) bàn cờ và gọi mô hình suy luận
+        features = board_to_features(board)
+        score = float(self.model.predict([features])[0])
+
+        # TIE-BREAKER: Cộng trừ vi chỉnh dựa trên Độ cơ động (Mobility)
+        mobility = len(list(board.legal_moves))
+        if board.turn == chess.WHITE:
+            score += (mobility * 0.01)
+        else:
+            score -= (mobility * 0.01)
+
+        # Lưu lại điểm vào Cache để dùng cho các nhánh lặp lại
+        self.table_cache[fen_key] = score
+        return score
+
+    def minimax(self, board: chess.Board, depth: int, alpha: float, beta: float, maximizing_player: bool) -> float:
+        """Ghi đè Minimax để nhúng Move Ordering vào"""
+        if board.is_checkmate():
+            return (-99999 - depth) if board.turn == chess.WHITE else (99999 + depth)
+        if board.is_game_over():
             return 0.0
-            
-        # TƯƠNG LAI: Viết code gọi model.predict() ở đây
-        # features = board_to_features(board)
-        # return float(self.model.predict([features])[0])
+        if depth == 0:
+            return self.evaluate_board(board)
+
+        # GỌI HÀM SẮP XẾP NƯỚC ĐI TẠI ĐÂY
+        ordered_moves = self.order_moves(board, list(board.legal_moves))
+
+        if maximizing_player:
+            max_eval = -math.inf
+            for move in ordered_moves:
+                board.push(move)
+                eval_score = self.minimax(board, depth - 1, alpha, beta, False)
+                board.pop()
+                max_eval = max(max_eval, eval_score)
+                alpha = max(alpha, eval_score)
+                if beta <= alpha:
+                    break
+            return max_eval
+        else:
+            min_eval = math.inf
+            for move in ordered_moves:
+                board.push(move)
+                eval_score = self.minimax(board, depth - 1, alpha, beta, True)
+                board.pop()
+                min_eval = min(min_eval, eval_score)
+                beta = min(beta, eval_score)
+                if beta <= alpha:
+                    break
+            return min_eval
+
+    def get_move(self, board: chess.Board) -> chess.Move:
+        """Khởi chạy tìm kiếm nước đi"""
+        best_move = None
+        ordered_moves = self.order_moves(board, list(board.legal_moves))
+        if not ordered_moves:
+            return None
+
+        maximizing_player = board.turn == chess.WHITE
+        best_value = -math.inf if maximizing_player else math.inf
+
+        for move in ordered_moves:
+            board.push(move)
+            board_value = self.minimax(board, self.depth - 1, -math.inf, math.inf, not maximizing_player)
+            board.pop()
+
+            if maximizing_player:
+                if board_value > best_value:
+                    best_value = board_value
+                    best_move = move
+            else:
+                if board_value < best_value:
+                    best_value = board_value
+                    best_move = move
+
+        if best_move is None:
+            best_move = random.choice(ordered_moves)
+        return best_move
 
 class GoodAgent(BaseSearchAgent):
     """Level 3: Nhìn trước 4 nước. Tối ưu Move Ordering và Transposition Table (Cache)."""
