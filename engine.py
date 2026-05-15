@@ -1,7 +1,18 @@
 import chess
 import random
 import math
+import joblib
+import numpy as np
 
+
+def board_to_features(board: chess.Board):
+    features = np.zeros(64)
+    piece_values = { chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 100 }
+    for square, piece in board.piece_map().items():
+        val = piece_values[piece.piece_type]
+        if piece.color == chess.BLACK: val = -val
+        features[square] = val
+    return features
 
 class Player:
     """
@@ -59,30 +70,38 @@ class BaseSearchAgent(Player):
         maximizing_player: bool,
     ) -> float:
         """
-        TODO: Triển khai logic Minimax có cắt tỉa Alpha-Beta tại đây. [cite: 38, 39]
+        Triển khai logic Minimax có cắt tỉa Alpha-Beta
         """
-        ### Sample guide
-        # Điều kiện dừng: Hết độ sâu hoặc game kết thúc
-        if depth == 0 or board.is_game_over():
-            return self.evaluate_board(board)
+        # 1. ĐIỀU KIỆN DỪNG: Bị chiếu hết
+        if board.is_checkmate():
+            return (-99999 - depth) if board.turn == chess.WHITE else (99999 + depth)
+        
+        if board.is_game_over(): 
+            return 0.0
 
+        if depth == 0:
+            return self.evaluate_board(board)
+        
         if maximizing_player:
             max_eval = -math.inf
             for move in board.legal_moves:
                 board.push(move)  # Thử đi
                 eval_score = self.minimax(board, depth - 1, alpha, beta, False)
                 board.pop()  # Hoàn tác
+                
                 max_eval = max(max_eval, eval_score)
                 alpha = max(alpha, eval_score)
                 if beta <= alpha:
                     break  # Cắt tỉa Beta
             return max_eval
+            
         else:
             min_eval = math.inf
             for move in board.legal_moves:
                 board.push(move)
                 eval_score = self.minimax(board, depth - 1, alpha, beta, True)
                 board.pop()
+                
                 min_eval = min(min_eval, eval_score)
                 beta = min(beta, eval_score)
                 if beta <= alpha:
@@ -141,6 +160,76 @@ class PoorAgent(BaseSearchAgent):
 
     # Đồng đội 1 có thể override hàm evaluate_board ở đây để chỉ tính điểm vật chất cơ bản (Tốt=1, Xe=5...)
 
+class MLPoorAgent(BaseSearchAgent):
+    """
+    Dummy ML Agent (Level 1).
+    Hiện tại chưa có mô hình. Sau khi train xong, nạp file pkl vào đây.
+    """
+    def __init__(self):
+        super().__init__(depth=1) # Độ sâu rất nông, chỉ nhìn trước 1 bước
+        self.model = None
+        
+        # MẪU CODE ĐỂ LOAD MODEL SAU NÀY (Bỏ comment khi đã có file):
+        # try:
+        #     self.model = joblib.load("poor_ml_model.pkl")
+        # except FileNotFoundError:
+        #     print("Chưa có file poor_ml_model.pkl")
+
+    def evaluate_board(self, board: chess.Board) -> float:
+        if board.is_checkmate():
+            return -99999 if board.turn == chess.WHITE else 99999
+        if board.is_stalemate() or board.is_insufficient_material():
+            return 0.0
+            
+        # Dummy behavior: Nếu chưa có não (model), mù lòa trả về 0
+        if self.model is None:
+            return 0.0
+            
+        # TƯƠNG LAI: Viết code gọi model.predict() ở đây giống MLAverageAgent
+        # features = board_to_features(board)
+        # return float(self.model.predict([features])[0])
+
+class MLAverageAgent(BaseSearchAgent):
+    def __init__(self):
+        # Đặt depth=2 để cân bằng giữa thời gian và độ khôn
+        # Decision Tree chạy rất nhanh nên depth=2 sẽ mất khoảng vài giây/nước
+        super().__init__(depth=3) 
+        
+        try:
+            # Load mô hình Cây quyết định (Decision Tree) đã train theo Chapter 10
+            self.model = joblib.load("./models/avg_model.pkl")
+        except FileNotFoundError:
+            print("CẢNH BÁO: Không tìm thấy avg_model.pkl. Bot sẽ đánh ngẫu nhiên.")
+            self.model = None
+            
+        # KHỞI TẠO CACHE: Đây là chìa khóa để bot chạy nhanh
+        # Lưu kết quả dự đoán của mô hình theo chuỗi FEN (trạng thái bàn cờ)
+        self.table_cache = {}
+
+    def evaluate_board(self, board: chess.Board) -> float:
+        if self.model is None:
+            return 0.0
+
+        fen_key = board.fen()
+        if fen_key in self.table_cache:
+            return self.table_cache[fen_key]
+
+        features = board_to_features(board) 
+        score = float(self.model.predict([features])[0])
+        
+        # MẸO HACK MOBILITY: Đếm số lượng nước đi hợp lệ hiện tại
+        # Trắng đến lượt -> Số nước đi của trắng. Đen đến lượt -> Số nước đi của đen.
+        mobility = len(list(board.legal_moves))
+        
+        # Cộng một lượng điểm RẤT NHỎ (0.01) để không làm hỏng trọng số của ML
+        # Nhưng đủ để phân loại các nước đi có cùng điểm ML
+        if board.turn == chess.WHITE:
+            score += (mobility * 0.01)
+        else:
+            score -= (mobility * 0.01)
+
+        self.table_cache[fen_key] = score
+        return score
 
 class AverageAgent(BaseSearchAgent):
     def __init__(self):
@@ -262,6 +351,34 @@ class AverageAgent(BaseSearchAgent):
         return score
     # Đồng đội 2 có thể override hàm evaluate_board ở đây để tính thêm vị trí đứng của quân cờ (Piece-Square Tables).
 
+class MLGoodAgent(BaseSearchAgent):
+    """
+    Dummy ML Agent (Level 3).
+    Cần một mô hình Multi-Layer Perceptron (Mạng nơ-ron) xịn và depth cao hơn.
+    """
+    def __init__(self):
+        super().__init__(depth=3) # Nhìn xa hơn để tận dụng mô hình xịn
+        self.model = None
+        
+        # MẪU CODE ĐỂ LOAD MODEL SAU NÀY (Bỏ comment khi đã có file):
+        # try:
+        #     self.model = joblib.load("good_ml_model.pkl")
+        # except FileNotFoundError:
+        #     print("Chưa có file good_ml_model.pkl")
+
+    def evaluate_board(self, board: chess.Board) -> float:
+        if board.is_checkmate():
+            return -99999 if board.turn == chess.WHITE else 99999
+        if board.is_stalemate() or board.is_insufficient_material():
+            return 0.0
+            
+        # Dummy behavior
+        if self.model is None:
+            return 0.0
+            
+        # TƯƠNG LAI: Viết code gọi model.predict() ở đây
+        # features = board_to_features(board)
+        # return float(self.model.predict([features])[0])
 
 class GoodAgent(BaseSearchAgent):
     """Level 3: Nhìn trước 4 nước trở lên. Cần tối ưu thuật toán tốt (như move ordering) để không bị chậm."""
