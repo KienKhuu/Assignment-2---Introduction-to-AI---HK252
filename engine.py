@@ -14,6 +14,38 @@ def board_to_features(board: chess.Board):
         features[square] = val
     return features
 
+def board_to_features_for_MLGood(board: chess.Board):
+    features = np.zeros(774) 
+    
+    # Ánh xạ 12 loại quân cờ ra index (0 đến 11)
+    piece_to_index = {
+        chess.Piece(chess.PAWN, chess.WHITE): 0,
+        chess.Piece(chess.KNIGHT, chess.WHITE): 1,
+        chess.Piece(chess.BISHOP, chess.WHITE): 2,
+        chess.Piece(chess.ROOK, chess.WHITE): 3,
+        chess.Piece(chess.QUEEN, chess.WHITE): 4,
+        chess.Piece(chess.KING, chess.WHITE): 5,
+        chess.Piece(chess.PAWN, chess.BLACK): 6,
+        chess.Piece(chess.KNIGHT, chess.BLACK): 7,
+        chess.Piece(chess.BISHOP, chess.BLACK): 8,
+        chess.Piece(chess.ROOK, chess.BLACK): 9,
+        chess.Piece(chess.QUEEN, chess.BLACK): 10,
+        chess.Piece(chess.KING, chess.BLACK): 11,
+    }
+
+    for square, piece in board.piece_map().items():
+        idx = piece_to_index[piece]
+        features[idx * 64 + square] = 1.0
+
+    features[768] = 1.0 if board.turn == chess.WHITE else 0.0 # Lượt của ai?
+    features[769] = 1.0 if board.has_kingside_castling_rights(chess.WHITE) else 0.0  # Trắng nhập thành gần
+    features[770] = 1.0 if board.has_queenside_castling_rights(chess.WHITE) else 0.0 # Trắng nhập thành xa
+    features[771] = 1.0 if board.has_kingside_castling_rights(chess.BLACK) else 0.0  # Đen nhập thành gần
+    features[772] = 1.0 if board.has_queenside_castling_rights(chess.BLACK) else 0.0 # Đen nhập thành xa
+    features[773] = 1.0 if board.is_check() else 0.0 # Có đang bị chiếu Vua không?
+
+    return features
+
 class Player:
     """
     Class gốc (Base class). TẤT CẢ các bot phải kế thừa từ class này.
@@ -356,7 +388,7 @@ class MLGoodAgent(BaseSearchAgent):
     Level 3: Mạng Nơ-ron (MLP) kết hợp Minimax + Alpha-Beta Pruning + Move Ordering + Caching.
     """
     def __init__(self):
-        super().__init__(depth=3) # Set depth=3 để đảm bảo tốc độ tính toán với Mạng Nơ-ron
+        super().__init__(depth=4) # Set depth=4 để đảm bảo tốc độ tính toán với Mạng Nơ-ron
         
         # 1. Tải mô hình Neural Network (MLP)
         try:
@@ -416,7 +448,7 @@ class MLGoodAgent(BaseSearchAgent):
             return self.table_cache[fen_key]
 
         # Lấy đặc trưng (features) bàn cờ và gọi mô hình suy luận
-        features = board_to_features(board)
+        features = board_to_features_for_MLGood(board)
         score = float(self.model.predict([features])[0])
 
         # TIE-BREAKER: Cộng trừ vi chỉnh dựa trên Độ cơ động (Mobility)
